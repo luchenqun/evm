@@ -22,6 +22,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/codec"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	paramstypes "github.com/cosmos/cosmos-sdk/x/params/types"
+	precisebankkeeper "github.com/cosmos/evm/x/precisebank/keeper"
 )
 
 // Keeper grants access to the EVM module state and implements the go-ethereum StateDB interface.
@@ -88,6 +89,17 @@ func NewKeeper(
 	// ensure the authority account is correct
 	if err := sdk.VerifyAddressFormat(authority); err != nil {
 		panic(err)
+	}
+
+	// ensure that use
+	// - precisebank module, when 0 < decimals < 18
+	// - bank module, when decimals == 18
+	_, isPreciseBank := bankKeeper.(precisebankkeeper.Keeper)
+	isEighteenDecimals := types.GetEVMCoinDecimals() == types.EighteenDecimals
+	if isPreciseBank && isEighteenDecimals {
+		panic("When PrecisebankKeeper is used, EVM coin decimals must not be 18")
+	} else if !isPreciseBank && !isEighteenDecimals {
+		panic("When BankKeeper is used, EVM coin decimals must be 18")
 	}
 
 	bankWrapper := wrappers.NewBankWrapper(bankKeeper)
