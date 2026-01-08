@@ -104,14 +104,14 @@ if [[ -n "$MNEMONICS_INPUT" && "$ADDITIONAL_USERS" -gt 0 ]]; then
   exit 1
 fi
 
-if [[ $install == true ]]; then
-  if [[ $BUILD_FOR_DEBUG == true ]]; then
-    # for remote debugging the optimization should be disabled and the debug info should not be stripped
-    make install COSMOS_BUILD_OPTIONS=nooptimization,nostrip
-  else
-    make install
-  fi
-fi
+# if [[ $install == true ]]; then
+#   if [[ $BUILD_FOR_DEBUG == true ]]; then
+#     # for remote debugging the optimization should be disabled and the debug info should not be stripped
+#     make install COSMOS_BUILD_OPTIONS=nooptimization,nostrip
+#   else
+#     make install
+#   fi
+# fi
 
 # User prompt if neither -y nor -n was passed as a flag
 # and an existing local node configuration is found.
