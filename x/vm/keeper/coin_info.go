@@ -79,7 +79,7 @@ func (k Keeper) LoadEvmCoinInfo(ctx sdk.Context) (_ types.EvmCoinInfo, err error
 	if displayExp < evmDenomExp {
 		return types.EvmCoinInfo{}, fmt.Errorf("display denom exponent (%d) must be greater than or equal to evm denom exponent (%d)", displayExp, evmDenomExp)
 	}
-	decimals = types.Decimals(displayExp - evmDenomExp)
+	decimals = types.Decimals(evmDenomExp)
 
 	var extendedDenom string
 	if decimals == 18 {
