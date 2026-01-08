@@ -20,16 +20,66 @@ func (k Keeper) LoadEvmCoinInfo(ctx sdk.Context) (_ types.EvmCoinInfo, err error
 	))
 	defer func() { evmtrace.EndSpanErr(span, err) }()
 	var decimals types.Decimals
+
+	// Try to find metadata by evm_denom first
 	evmDenomMetadata, found := k.bankWrapper.GetDenomMetaData(ctx, params.EvmDenom)
-	if !found {
-		return types.EvmCoinInfo{}, fmt.Errorf("denom metadata %s could not be found", params.EvmDenom)
+
+	// If not found, try to find by extended_denom (which might be the base denom)
+	if !found && params.ExtendedDenomOptions != nil {
+		evmDenomMetadata, found = k.bankWrapper.GetDenomMetaData(ctx, params.ExtendedDenomOptions.ExtendedDenom)
 	}
+
+	if !found {
+		extendedDenomStr := "N/A"
+		if params.ExtendedDenomOptions != nil {
+			extendedDenomStr = params.ExtendedDenomOptions.ExtendedDenom
+		}
+		return types.EvmCoinInfo{}, fmt.Errorf("denom metadata for %s (or extended denom %s) could not be found", params.EvmDenom, extendedDenomStr)
+	}
+
+	var displayExp, evmDenomExp, baseExp uint32
+	displayFound, evmDenomFound, baseFound := false, false, false
 
 	for _, denomUnit := range evmDenomMetadata.DenomUnits {
 		if denomUnit.Denom == evmDenomMetadata.Display {
-			decimals = types.Decimals(denomUnit.Exponent)
+			displayExp = denomUnit.Exponent
+			displayFound = true
+		}
+		if denomUnit.Denom == params.EvmDenom {
+			evmDenomExp = denomUnit.Exponent
+			evmDenomFound = true
+		}
+		if denomUnit.Denom == evmDenomMetadata.Base {
+			baseExp = denomUnit.Exponent
+			baseFound = true
 		}
 	}
+
+	if !displayFound {
+		return types.EvmCoinInfo{}, fmt.Errorf("display denom %s not found in denom_units", evmDenomMetadata.Display)
+	}
+	if !evmDenomFound {
+		return types.EvmCoinInfo{}, fmt.Errorf("evm denom %s not found in denom_units", params.EvmDenom)
+	}
+	if !baseFound {
+		return types.EvmCoinInfo{}, fmt.Errorf("base denom %s not found in denom_units", evmDenomMetadata.Base)
+	}
+
+	// Calculate decimals: the difference between display exponent and evm denom exponent
+	// represents how many decimal places the evm denom has relative to the display denom.
+	// For example, if display is "atom" (exp=18) and evm_denom is "uatom" (exp=12),
+	// then 1 atom = 10^(18-12) uatom = 10^6 uatom, meaning uatom has 6 decimal places.
+	// This means ConversionFactor[6] = 10^12 is needed to convert uatom to the 18-decimal representation.
+	//
+	// IMPORTANT: The base denom must be the extended denom (smallest unit) with exponent=0.
+	// For non-18-decimal chains: base must equal extended_denom (e.g., "aatom" with exp=0).
+	if baseExp != 0 {
+		return types.EvmCoinInfo{}, fmt.Errorf("base denom exponent must be 0, got %d for %s", baseExp, evmDenomMetadata.Base)
+	}
+	if displayExp < evmDenomExp {
+		return types.EvmCoinInfo{}, fmt.Errorf("display denom exponent (%d) must be greater than or equal to evm denom exponent (%d)", displayExp, evmDenomExp)
+	}
+	decimals = types.Decimals(displayExp - evmDenomExp)
 
 	var extendedDenom string
 	if decimals == 18 {
