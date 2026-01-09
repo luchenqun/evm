@@ -65,11 +65,14 @@ func (k Keeper) LoadEvmCoinInfo(ctx sdk.Context) (_ types.EvmCoinInfo, err error
 		return types.EvmCoinInfo{}, fmt.Errorf("base denom %s not found in denom_units", evmDenomMetadata.Base)
 	}
 
-	// Calculate decimals: the difference between display exponent and evm denom exponent
-	// represents how many decimal places the evm denom has relative to the display denom.
-	// For example, if display is "atom" (exp=18) and evm_denom is "uatom" (exp=12),
-	// then 1 atom = 10^(18-12) uatom = 10^6 uatom, meaning uatom has 6 decimal places.
-	// This means ConversionFactor[6] = 10^12 is needed to convert uatom to the 18-decimal representation.
+	// Calculate decimals: the evm denom exponent represents how many decimal places
+	// the evm denom has relative to the base denom (smallest unit with exp=0).
+	// For example, if base is "aatom" (exp=0), evm_denom is "uatom" (exp=6), and display is "atom" (exp=18),
+	// then 1 uatom = 10^6 aatom (base denom), meaning uatom has 6 decimal places relative to the base.
+	// The decimals value is set to evmDenomExp (6 in this example), which represents the number of decimal places
+	// the evm_denom has relative to the base denom.
+	// ConversionFactor[6] = 10^12 is needed to convert uatom (6 decimals) to 18-decimal representation (aatom),
+	// which is the extended denom used by the EVM.
 	//
 	// IMPORTANT: The base denom must be the extended denom (smallest unit) with exponent=0.
 	// For non-18-decimal chains: base must equal extended_denom (e.g., "aatom" with exp=0).

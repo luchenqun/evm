@@ -58,7 +58,7 @@
 | 配置场景 | evm_denom | extended_denom | 转换因子 | 说明 |
 |---------|-----------|----------------|----------|------|
 | 18 位小数 | `atest` | `atest`（相同） | 1 | 无需扩展，两者相同 |
-| 6 位小数 | `uatom` | `aatom` | 10^12 | 需要扩展 12 位小数 |
+| 6 位小数 | `utest` | `atest` | 10^6 | 需要扩展 6 位小数到 atest |
 | 12 位小数 | `ptest2` | `atest2` | 10^6 | 需要扩展 6 位小数 |
 
 ### 2. 存储位置
@@ -82,10 +82,23 @@ extended_denom (扩展代币)
 // 在 x/vm/keeper/coin_info.go 中的逻辑
 func (k Keeper) LoadEvmCoinInfo(ctx sdk.Context) (types.EvmCoinInfo, error) {
     params := k.GetParams(ctx)
-    
-    // 从银行元数据获取精度
-    decimals := getDecimalsFromMetadata(params.EvmDenom)
-    
+
+    // 1. 尝试从 evm_denom 查找元数据
+    evmDenomMetadata, found := k.bankWrapper.GetDenomMetaData(ctx, params.EvmDenom)
+
+    // 2. 如果找不到，尝试从 extended_denom 查找
+    if !found && params.ExtendedDenomOptions != nil {
+        evmDenomMetadata, found = k.bankWrapper.GetDenomMetaData(ctx, params.ExtendedDenomOptions.ExtendedDenom)
+    }
+
+    if !found {
+        return types.EvmCoinInfo{}, fmt.Errorf("denom metadata not found")
+    }
+
+    // 3. 从元数据中获取 evm_denom 的 exponent
+    decimals := evmDenomExp  // 从元数据的 denom_units 中获取
+
+    // 4. 确定 extended_denom
     var extendedDenom string
     if decimals == 18 {
         // 如果已经是 18 位小数，则 extended_denom = evm_denom
@@ -97,11 +110,11 @@ func (k Keeper) LoadEvmCoinInfo(ctx sdk.Context) (types.EvmCoinInfo, error) {
         }
         extendedDenom = params.ExtendedDenomOptions.ExtendedDenom
     }
-    
+
     return types.EvmCoinInfo{
         Denom:         params.EvmDenom,        // evm_denom
         ExtendedDenom: extendedDenom,          // extended_denom
-        Decimals:      decimals,
+        Decimals:      decimals,               // evm_denom 的 exponent
     }, nil
 }
 ```
@@ -151,9 +164,9 @@ func ExtendedCoinDenom() string {
 {
   "evm": {
     "params": {
-      "evm_denom": "uatom",
+      "evm_denom": "utest",
       "extended_denom_options": {
-        "extended_denom": "aatom"
+        "extended_denom": "atest"
       }
     }
   }
@@ -161,22 +174,22 @@ func ExtendedCoinDenom() string {
 ```
 
 **说明**：
-- `evm_denom = "uatom"`（6 位小数）
-- `extended_denom = "aatom"`（18 位小数）
-- 转换因子 = 10^12
+- `evm_denom = "utest"`（exponent=6）
+- `extended_denom = "atest"`（exponent=0，最小单位）
+- 转换因子 = 10^6
 - `precisebank` 模块负责精度扩展
 
-### 示例 3：当前配置（atest + stake）
+### 示例 3：当前配置（utest + atest）
 
-根据您提供的 genesis.json：
+根据 local_node.sh 的配置：
 
 ```json
 {
   "evm": {
     "params": {
-      "evm_denom": "atest",
+      "evm_denom": "utest",
       "extended_denom_options": {
-        "extended_denom": "stake"
+        "extended_denom": "atest"
       }
     }
   }
@@ -184,10 +197,11 @@ func ExtendedCoinDenom() string {
 ```
 
 **分析**：
-1. `evm_denom = "atest"`：基础代币名称
-2. `extended_denom = "stake"`：扩展代币名称
-3. 如果 `atest` 的元数据显示为 18 位小数，则代码会忽略 `extended_denom_options`，直接使用 `atest`
-4. 如果 `atest` 的元数据显示小于 18 位小数，则使用 `stake` 作为扩展代币
+1. `evm_denom = "utest"`：基础代币名称（exponent=6）
+2. `extended_denom = "atest"`：扩展代币名称（exponent=0，最小单位）
+3. 代码会先尝试用 "utest" 查找 metadata，找到后从中获取 utest 的 exponent=6
+4. 由于 exponent=6 ≠ 18，使用 `extended_denom_options` 中的 "atest" 作为扩展代币
+5. 转换因子 = 10^6
 
 ## 余额表示
 
@@ -199,25 +213,25 @@ func ExtendedCoinDenom() string {
 总余额（extended_denom）= 整数余额（evm_denom）× 转换因子 + 分数余额
 ```
 
-**示例**（6 位小数代币）：
-- 整数余额：1000 `uatom`（存储在 x/bank）
-- 分数余额：500000000000 `aatom`（存储在 x/precisebank）
-- 总余额：1000 × 10^12 + 500000000000 = 1000500000000000 `aatom`
+**示例**（6 位 exponent 代币）：
+- 整数余额：1000 `utest`（存储在 x/bank）
+- 分数余额：500000 `atest`（存储在 x/precisebank）
+- 总余额：1000 × 10^6 + 500000 = 1000500000 `atest`
 
 ### 查询余额
 
 ```bash
 # 查询整数余额（evm_denom）
 evmd query bank balances <address>
-# 返回：1000uatom
+# 返回：1000utest
 
 # 查询扩展余额（extended_denom）
-evmd query bank balances <address> --denom stake
-# 返回：1000500000000000stake（包含整数和分数部分）
+evmd query bank balances <address> --denom atest
+# 返回：1000500000atest（包含整数和分数部分）
 
 # 查询分数余额
 evmd query precisebank fractional-balance <address>
-# 返回：500000000000stake（仅分数部分）
+# 返回：500000atest（仅分数部分）
 ```
 
 ## EVM 交易中的使用
@@ -229,13 +243,13 @@ evmd query precisebank fractional-balance <address>
    - 例如：发送 0.1 ETH
 
 2. **系统转换**：
-   - EVM 层将 ETH 转换为 `extended_denom`（如 `stake`）
-   - 0.1 ETH = 100000000000000000 wei = 100000000000000000 `stake`
+   - EVM 层将 ETH 转换为 `extended_denom`（如 `atest`）
+   - 0.1 ETH = 100000000000000000 wei = 100000000000000000 `atest`
 
 3. **precisebank 处理**：
    - 如果 `extended_denom ≠ evm_denom`，`precisebank` 模块处理精度转换
-   - 整数部分：100000000000000000 ÷ 10^12 = 100000 `atest`（存储在 x/bank）
-   - 分数部分：100000000000000000 mod 10^12 = 0 `stake`（存储在 x/precisebank）
+   - 整数部分：100000000000000000 ÷ 10^6 = 100000000000 `utest`（存储在 x/bank）
+   - 分数部分：100000000000000000 mod 10^6 = 0 `atest`（存储在 x/precisebank）
 
 4. **余额更新**：
    - x/bank：更新 `evm_denom` 余额
@@ -281,8 +295,8 @@ if decimals != 18 {
 ### Q1: 为什么需要两个代币名称？
 
 **A**: 因为 Cosmos SDK 和 EVM 对精度有不同的要求：
-- Cosmos SDK：通常使用 6 位小数（如 `uatom`）
-- EVM：要求 18 位小数（如 ETH）
+- Cosmos SDK：可以使用不同精度的代币（如 `utest` exponent=6）
+- EVM：内部使用最小单位表示（如 `atest` exponent=0，对应 18 位小数系统）
 - `precisebank` 模块通过两个代币名称实现精度扩展，同时保持兼容性
 
 ### Q2: 如果配置错误会怎样？
@@ -313,16 +327,17 @@ cat build/nodes/node0/evmd/config/genesis.json | jq '.app_state.evm.params'
 
 | 特性 | evm_denom | extended_denom |
 |------|-----------|----------------|
-| **定义** | 基础代币（整数部分） | 扩展代币（18位小数） |
+| **定义** | 基础代币（整数部分） | 扩展代币（最小单位，exponent=0） |
 | **存储** | x/bank 模块 | x/bank（整数）+ x/precisebank（分数） |
-| **精度** | 由元数据决定 | 固定 18 位小数 |
+| **精度** | 由元数据的 exponent 决定 | 作为最小单位，用于 EVM 18 位小数表示 |
 | **用途** | Cosmos SDK 交易 | EVM 交易 |
 | **关系** | 整数部分 | 整数 + 分数部分 |
-| **配置** | 必须 | 18位小数时可省略（等于evm_denom） |
+| **配置** | 必须 | exponent=18时可省略（等于evm_denom） |
 
 **关键要点**：
-1. `evm_denom` 是基础代币，存储在 `x/bank`
-2. `extended_denom` 是扩展代币，由 `precisebank` 模块管理
-3. 如果基础代币已经是 18 位小数，两者相同
-4. 如果基础代币小于 18 位小数，需要配置不同的 `extended_denom`
-5. 所有 EVM 交易都使用 `extended_denom`，系统自动处理精度转换
+1. `evm_denom` 是基础代币，存储在 `x/bank`，其 exponent 由 metadata 决定
+2. `extended_denom` 是扩展代币（最小单位），由 `precisebank` 模块管理
+3. 如果 evm_denom 的 exponent 已经是 18，两者相同
+4. 如果 evm_denom 的 exponent 小于 18，需要配置不同的 `extended_denom`（通常是 base denom）
+5. 代码会先尝试用 `evm_denom` 查找 metadata，找不到再用 `extended_denom` 查找
+6. 所有 EVM 交易都使用 `extended_denom`，系统自动处理精度转换

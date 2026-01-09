@@ -192,8 +192,8 @@
 ### 背景
 
 这个 EVM 项目需要：
-1. 兼容 Cosmos 的 6 位小数传统（`uatom`）
-2. 支持 EVM 的 18 位小数（`aatom`）
+1. 兼容 Cosmos 的传统交易（使用 `utest`）
+2. 支持 EVM 的 18 位小数（`atest`）
 3. 使用 `precisebank` 模块在两者之间转换
 
 ### 正确的配置
@@ -202,71 +202,69 @@
 {
   "denom_metadata": [
     {
-      "description": "Native 18-decimal denom metadata for Cosmos EVM chain",
+      "description": "The native staking token for evmd.",
       "denom_units": [
         {
-          "denom": "aatom",
+          "denom": "atest",
           "exponent": 0,
+          "aliases": ["attotest"]
+        },
+        {
+          "denom": "utest",
+          "exponent": 6,
           "aliases": []
         },
         {
-          "denom": "uatom",
-          "exponent": 12,
-          "aliases": []
-        },
-        {
-          "denom": "atom",
+          "denom": "test",
           "exponent": 18,
           "aliases": []
         }
       ],
-      "base": "aatom",
-      "display": "atom",
-      "name": "Cosmos EVM",
-      "symbol": "ATOM"
+      "base": "atest",
+      "display": "test",
+      "name": "Test Token",
+      "symbol": "TEST"
     }
   ]
 }
 ```
 
-### 为什么 uatom 的 exponent 是 12？
+### 为什么 utest 的 exponent 是 6？
 
 这是最容易混淆的地方，让我详细解释：
 
-#### 传统 Cosmos 的定义
-```
-1 atom = 10^6 uatom
-```
+#### Exponent 的含义
 
-这意味着 atom 有 6 位小数。
-
-#### EVM 需要 18 位小数
-
-但 EVM（以太坊虚拟机）使用 18 位小数：
+Exponent 表示"相对于 base 的 10 的幂次"：
 ```
-1 atom = 10^18 wei (或在这个项目中称为 aatom)
+1 单位 = 10^exponent × base
 ```
 
-#### 计算 uatom 相对于 aatom 的关系
+#### 本项目的配置
 
-如果：
-- 1 atom = 10^18 aatom（EVM 定义）
-- 1 atom = 10^6 uatom（Cosmos 定义）
+在当前配置中：
+- base = "atest"（最小单位，exponent=0）
+- utest 的 exponent = 6，意味着：`1 utest = 10^6 atest`
+- test 的 exponent = 18，意味着：`1 test = 10^18 atest`
 
-那么：
+#### 计算单位关系
+
+从上面的定义可以推导出 utest 和 test 的关系：
 ```
-10^6 uatom = 10^18 aatom
-1 uatom = 10^18 / 10^6 aatom
-1 uatom = 10^12 aatom
+1 test = 10^18 atest
+1 utest = 10^6 atest
+
+因此：
+1 test = 10^18 / 10^6 utest = 10^12 utest
 ```
 
-所以，**uatom 相对于 base (aatom) 的 exponent 是 12**。
+这意味着 **test 相对于 utest 有 12 位小数**（而不是传统 Cosmos 的 6 位小数）。
 
 ### 三层单位结构
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                          1 atom                             │
+│                          1 test                             │
 │                     (显示单位, exp=18)                       │
 └─────────────────────────────────────────────────────────────┘
                               │
@@ -274,23 +272,23 @@
               │                               │
               ▼                               ▼
 ┌──────────────────────────┐    ┌──────────────────────────┐
-│      10^6 uatom          │    │     10^18 aatom          │
-│   (Cosmos 单位, exp=12)  │    │    (EVM 单位, exp=0)     │
-│     6 位小数单位          │    │    18 位小数单位          │
+│      10^12 utest         │    │     10^18 atest          │
+│   (Cosmos 单位, exp=6)   │    │    (EVM 单位, exp=0)     │
+│     12 位小数单位         │    │    18 位小数单位          │
 └──────────────────────────┘    └──────────────────────────┘
               │                               │
               └───────────────┬───────────────┘
                               │
-                         1 uatom = 10^12 aatom
+                         1 utest = 10^6 atest
 ```
 
 ### 单位换算表
 
-| 单位 | Exponent | 相对于 aatom | 相对于 uatom | 相对于 atom |
+| 单位 | Exponent | 相对于 atest | 相对于 utest | 相对于 test |
 |------|----------|--------------|--------------|-------------|
-| aatom | 0 | 1 | 10^-12 | 10^-18 |
-| uatom | 12 | 10^12 | 1 | 10^-6 |
-| atom | 18 | 10^18 | 10^6 | 1 |
+| atest | 0 | 1 | 10^-6 | 10^-18 |
+| utest | 6 | 10^6 | 1 | 10^-12 |
+| test | 18 | 10^18 | 10^12 | 1 |
 
 ### 实际应用
 
@@ -299,25 +297,25 @@
 用户发送 1 ETH (= 10^18 wei)：
 
 ```
-EVM 金额: 10^18 (单位: wei/aatom, 18 位小数)
+EVM 金额: 10^18 (单位: wei/atest, 18 位小数)
          ↓
-转换到 Cosmos: 10^18 aatom
+转换到 Cosmos: 10^18 atest
          ↓
 precisebank 转换:
-  整数部分 = 10^18 ÷ 10^12 = 10^6 uatom
-  分数部分 = 10^18 mod 10^12 = 0 aatom
+  整数部分 = 10^18 ÷ 10^6 = 10^12 utest
+  分数部分 = 10^18 mod 10^6 = 0 atest
          ↓
-最终扣除: 10^6 uatom (= 1 atom) ✓
+最终扣除: 10^12 utest (= 1 test) ✓
 ```
 
 #### 场景 2：Cosmos 原生转账
 
-用户发送 1 atom：
+用户发送 1 test：
 
 ```
-Cosmos 金额: 1,000,000 uatom (6 位小数)
+Cosmos 金额: 1,000,000,000,000 utest (12 位小数)
          ↓
-扩展到 18 位小数: 1,000,000 × 10^12 = 10^18 aatom
+扩展到 18 位小数: 1,000,000,000,000 × 10^6 = 10^18 atest
          ↓
 在 EVM 中显示: 10^18 wei = 1 ETH ✓
 ```
@@ -379,27 +377,27 @@ Cosmos 金额: 1,000,000 uatom (6 位小数)
 {
   "denom_units": [
     {
-      "denom": "aatom",
+      "denom": "atest",
       "exponent": 0
     },
     {
-      "denom": "uatom",
-      "exponent": 12
+      "denom": "utest",
+      "exponent": 6
     },
     {
-      "denom": "atom",
+      "denom": "test",
       "exponent": 18
     }
   ],
-  "base": "aatom",
-  "display": "atom"
+  "base": "atest",
+  "display": "test"
 }
 ```
 
-- base 是 `aatom`（18 位小数）
-- `uatom` 是 Cosmos 原生单位（6 位小数）
-- `atom` 是显示单位
-- 需要 `precisebank` 在 `aatom` 和 `uatom` 之间转换
+- base 是 `atest`（最小单位，18 位小数系统）
+- `utest` 是 Cosmos 交易单位（相对于 test 有 12 位小数）
+- `test` 是显示单位
+- 需要 `precisebank` 在 `atest` 和 `utest` 之间转换
 
 ---
 
@@ -433,53 +431,53 @@ Cosmos 金额: 1,000,000 uatom (6 位小数)
 }
 ```
 
-### 错误 2：Exponent 计算错误
+### 错误 2：Base 和 Display Exponent 不匹配
 
-❌ **错误配置**（你的原始配置）：
+❌ **错误配置**：
 ```json
 {
   "denom_units": [
     {
-      "denom": "aatom",
+      "denom": "atest",
       "exponent": 0
     },
     {
-      "denom": "uatom",
-      "exponent": 6  // ❌ 错误！
+      "denom": "utest",
+      "exponent": 6
     },
     {
-      "denom": "atom",
-      "exponent": 18
+      "denom": "test",
+      "exponent": 12  // ❌ 错误！display 应该是最大的 exponent
     }
   ],
-  "base": "aatom"
+  "base": "atest",
+  "display": "test"
 }
 ```
 
 **问题**：
-- 如果 uatom 的 exponent 是 6，那么 1 uatom = 10^6 aatom
-- 但我们需要 1 atom = 10^6 uatom（Cosmos 传统）
-- 所以 1 uatom = 10^18 / 10^6 = 10^12 aatom
-- 因此 uatom 的 exponent 应该是 12
+- display 通常应该是 exponent 最大的单位
+- 本项目需要 EVM 18 位小数，所以 display 的 exponent 应该是 18
 
 ✅ **正确配置**：
 ```json
 {
   "denom_units": [
     {
-      "denom": "aatom",
+      "denom": "atest",
       "exponent": 0
     },
     {
-      "denom": "uatom",
-      "exponent": 12  // ✓ 正确！
+      "denom": "utest",
+      "exponent": 6  // ✓ 正确！
     },
     {
-      "denom": "atom",
-      "exponent": 18
+      "denom": "test",
+      "exponent": 18  // ✓ 正确！
     }
   ],
-  "base": "aatom"
+  "base": "atest",
+  "display": "test"
 }
 ```
 
@@ -554,19 +552,19 @@ Cosmos 金额: 1,000,000 uatom (6 位小数)
 
 ### 手动计算验证
 
-对于你的配置（修复后）：
+对于当前配置：
 
 ```
-base = aatom, exponent = 0
-uatom, exponent = 12 → 1 uatom = 10^12 aatom
-atom, exponent = 18 → 1 atom = 10^18 aatom
+base = atest, exponent = 0
+utest, exponent = 6 → 1 utest = 10^6 atest
+test, exponent = 18 → 1 test = 10^18 atest
 
-验证 Cosmos 传统定义：
-1 atom = 10^18 aatom
-1 uatom = 10^12 aatom
-所以 1 atom = (10^18 / 10^12) uatom = 10^6 uatom ✓
+验证单位关系：
+1 test = 10^18 atest
+1 utest = 10^6 atest
+所以 1 test = (10^18 / 10^6) utest = 10^12 utest ✓
 
-这符合 Cosmos 的 6 位小数传统！
+这意味着 test 相对于 utest 有 12 位小数！
 ```
 
 ---
@@ -583,28 +581,30 @@ atom, exponent = 18 → 1 atom = 10^18 aatom
    - 中间单位（如 `uatom`）的 exponent 需要正确计算
    - 保持与 Cosmos 传统的兼容性
 
-### 你的配置修复
+### 配置要点
 
-| 字段 | 错误值 | 正确值 | 原因 |
-|------|--------|--------|------|
-| base | "uatom" | "aatom" | aatom 才是最小单位 (exp=0) |
-| uatom exponent | 6 | 12 | 1 uatom = 10^12 aatom |
+| 字段 | 值 | 说明 |
+|------|-----|------|
+| base | "atest" | 最小单位，exponent 必须为 0 |
+| utest exponent | 6 | 1 utest = 10^6 atest |
+| test exponent | 18 | 1 test = 10^18 atest |
+| display | "test" | 显示单位，通常是最大 exponent 的单位 |
 
 ### 记忆技巧
 
 想象一个楼梯：
 
 ```
-atom (18层)      ← display (最上层)
+test (18层)      ← display (最上层)
    ↑
-uatom (12层)     ← 中间层
+utest (6层)      ← 中间层
    ↑
-aatom (0层)      ← base (地面)
+atest (0层)      ← base (地面)
 ```
 
-- 从 base 到 uatom 需要爬 12 层 (exponent=12)
-- 从 base 到 atom 需要爬 18 层 (exponent=18)
-- 从 uatom 到 atom 需要爬 6 层 (18-12=6，符合 Cosmos 6 位小数)
+- 从 base 到 utest 需要爬 6 层 (exponent=6)
+- 从 base 到 test 需要爬 18 层 (exponent=18)
+- 从 utest 到 test 需要爬 12 层 (18-6=12，相对于 test 有 12 位小数)
 
 ---
 

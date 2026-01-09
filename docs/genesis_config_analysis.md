@@ -512,9 +512,9 @@
 {
   "evm": {
     "params": {
-      "evm_denom": "uatom",
+      "evm_denom": "utest",
       "extended_denom_options": {
-        "extended_denom": "aatom"
+        "extended_denom": "atest"
       }
     }
   }
@@ -522,8 +522,8 @@
 ```
 
 **关键配置**：
-- `evm_denom`: `"uatom"` - 基础代币（整数代币）
-- `extended_denom`: `"aatom"` - 扩展代币（18位小数）
+- `evm_denom`: `"utest"` - 基础代币（exponent=6）
+- `extended_denom`: `"atest"` - 扩展代币（exponent=0，最小单位）
 
 ### 2. 代币元数据（Denom Metadata）
 
@@ -532,28 +532,28 @@
   "bank": {
     "denom_metadata": [
       {
-        "description": "Native 18-decimal denom metadata for Cosmos EVM chain",
+        "description": "The native staking token for evmd.",
         "denom_units": [
           {
-            "denom": "aatom",
+            "denom": "atest",
             "exponent": 0,
-            "aliases": []
+            "aliases": ["attotest"]
           },
           {
-            "denom": "uatom",
+            "denom": "utest",
             "exponent": 6,
             "aliases": []
           },
           {
-            "denom": "atom",
+            "denom": "test",
             "exponent": 18,
             "aliases": []
           }
         ],
-        "base": "uatom",
-        "display": "atom",
-        "name": "Cosmos EVM",
-        "symbol": "ATOM"
+        "base": "atest",
+        "display": "test",
+        "name": "Test Token",
+        "symbol": "TEST"
       }
     ]
   }
@@ -562,24 +562,24 @@
 
 **元数据解析**：
 
-| Denom   | Exponent | 精度     | 说明                             |
-| ------- | -------- | -------- | -------------------------------- |
-| `aatom` | 0        | 18位小数 | 最小单位（atto-atom），扩展代币  |
-| `uatom` | 6        | 6位小数  | 基础单位（micro-atom），整数代币 |
-| `atom`  | 18       | 0位小数  | 显示单位（主单位）               |
+| Denom   | Exponent | 相对于 base 的关系     | 说明                             |
+| ------- | -------- | ---------------------- | -------------------------------- |
+| `atest` | 0        | 1 atest = 1 atest      | 最小单位（base），扩展代币       |
+| `utest` | 6        | 1 utest = 10^6 atest   | 中间单位，整数代币               |
+| `test`  | 18       | 1 test = 10^18 atest   | 显示单位（主单位）               |
 
 **关系**：
-- 1 `atom` = 10^18 `aatom` = 10^6 `uatom`
-- 1 `uatom` = 10^12 `aatom`
-- 转换因子 C = 10^12
+- 1 `test` = 10^18 `atest` = 10^12 `utest`
+- 1 `utest` = 10^6 `atest`
+- 转换因子 C = 10^6 （utest 到 atest）
 
 ## 配置分析
 
-### evm_denom = "uatom"
+### evm_denom = "utest"
 
 **作用**：
 - 这是 Cosmos SDK 中 `x/bank` 模块管理的基础代币
-- 精度：6 位小数（exponent = 6）
+- exponent：6（从 denom_metadata 中获取）
 - 存储在 `x/bank` 模块中
 - 对应 `precisebank` 模块的 `IntegerCoinDenom()`
 
@@ -587,28 +587,28 @@
 ```go
 // x/precisebank/types/fractional_balance.go
 func IntegerCoinDenom() string {
-    return evmtypes.GetEVMCoinDenom()  // 返回 "uatom"
+    return evmtypes.GetEVMCoinDenom()  // 返回 "utest"
 }
 ```
 
 **余额存储示例**：
 ```json
 {
-  "address": "cosmos1hajh6rhhkjqkwet6wqld3lgx8ur4y3khsahcul",
+  "address": "cosmos1...",
   "coins": [
     {
-      "denom": "uatom",
+      "denom": "utest",
       "amount": "1000000000000000000000"  // 存储在 x/bank
     }
   ]
 }
 ```
 
-### extended_denom = "aatom"
+### extended_denom = "atest"
 
 **作用**：
-- 这是 EVM 中使用的扩展代币
-- 精度：18 位小数（exponent = 0，表示最小单位）
+- 这是 EVM 中使用的扩展代币（最小单位）
+- exponent：0（base denom，最小单位）
 - 由 `precisebank` 模块管理
 - 对应 `precisebank` 模块的 `ExtendedCoinDenom()`
 
@@ -616,13 +616,13 @@ func IntegerCoinDenom() string {
 ```go
 // x/precisebank/types/fractional_balance.go
 func ExtendedCoinDenom() string {
-    return evmtypes.GetEVMCoinExtendedDenom()  // 返回 "aatom"
+    return evmtypes.GetEVMCoinExtendedDenom()  // 返回 "atest"
 }
 ```
 
 **余额组成**：
 ```
-总余额（aatom）= 整数余额（uatom）× 10^12 + 分数余额（aatom）
+总余额（atest）= 整数余额（utest）× 10^6 + 分数余额（atest）
 ```
 
 ## 精度扩展机制
@@ -630,13 +630,13 @@ func ExtendedCoinDenom() string {
 ### 转换关系
 
 ```
-uatom (6位小数)  ←→  aatom (18位小数)
-     × 10^12              ÷ 10^12
+utest (exponent=6)  ←→  atest (exponent=0)
+     × 10^6              ÷ 10^6
 ```
 
 **示例转换**：
-- 1000 `uatom` = 1000 × 10^12 = 1,000,000,000,000,000 `aatom`
-- 500,000,000,000 `aatom` = 500,000,000,000 ÷ 10^12 = 0.5 `uatom`
+- 1000 `utest` = 1000 × 10^6 = 1,000,000,000 `atest`
+- 500,000 `atest` = 500,000 ÷ 10^6 = 0.5 `utest`
 
 ### 余额表示示例
 
@@ -645,7 +645,7 @@ uatom (6位小数)  ←→  aatom (18位小数)
 **整数部分**（存储在 x/bank）：
 ```json
 {
-  "denom": "uatom",
+  "denom": "utest",
   "amount": "1000"
 }
 ```
@@ -654,15 +654,15 @@ uatom (6位小数)  ←→  aatom (18位小数)
 ```json
 {
   "address": "cosmos1...",
-  "fractional_balance": "500000000000"  // 单位：aatom
+  "fractional_balance": "500000"  // 单位：atest
 }
 ```
 
 **总余额计算**：
 ```
-总余额 = 1000 × 10^12 + 500000000000
-      = 1,000,000,000,000,000 + 500,000,000,000
-      = 1,000,500,000,000,000 aatom
+总余额 = 1000 × 10^6 + 500000
+      = 1,000,000,000 + 500,000
+      = 1,000,500,000 atest
 ```
 
 ## 实际配置验证
@@ -672,30 +672,30 @@ uatom (6位小数)  ←→  aatom (18位小数)
 根据 `x/vm/keeper/coin_info.go` 的逻辑：
 
 ```go
-// 1. 获取 evm_denom 的元数据
-evmDenomMetadata := GetDenomMetaData("uatom")
-// 返回：base="uatom", display="atom", exponent=6
+// 1. 尝试获取 evm_denom 的元数据
+evmDenomMetadata, found := GetDenomMetaData("utest")
+// 找到：base="atest", display="test", 包含 utest 的定义（exponent=6）
 
-// 2. 确定精度
-decimals = 6  // 从元数据中获取
+// 2. 从元数据中获取 utest 的 exponent
+decimals = 6  // utest 的 exponent
 
 // 3. 确定 extended_denom
 if decimals == 18 {
-    extendedDenom = "uatom"  // 不需要扩展
+    extendedDenom = "utest"  // 不需要扩展
 } else {
-    extendedDenom = params.ExtendedDenomOptions.ExtendedDenom  // "aatom"
+    extendedDenom = params.ExtendedDenomOptions.ExtendedDenom  // "atest"
 }
 
 // 结果：
-// Denom: "uatom"
-// ExtendedDenom: "aatom"
+// Denom: "utest"
+// ExtendedDenom: "atest"
 // Decimals: 6
 ```
 
 **验证结果**：✅ 配置正确
-- `evm_denom` = "uatom"（6位小数）
-- `extended_denom` = "aatom"（18位小数）
-- 转换因子 = 10^12
+- `evm_denom` = "utest"（exponent=6）
+- `extended_denom` = "atest"（exponent=0，最小单位）
+- 转换因子 = 10^6
 
 ### 2. 余额配置验证
 
@@ -762,31 +762,31 @@ if decimals == 18 {
 
 2. **系统转换**：
    ```
-   ETH → aatom
-   1 ETH = 1,000,000,000,000,000,000 wei = 1,000,000,000,000,000,000 aatom
+   ETH → atest
+   1 ETH = 1,000,000,000,000,000,000 wei = 1,000,000,000,000,000,000 atest
    ```
 
 3. **precisebank 处理**：
    ```
-   整数部分：1,000,000,000,000,000,000 ÷ 10^12 = 1,000,000 uatom
-   分数部分：1,000,000,000,000,000,000 mod 10^12 = 0 aatom
+   整数部分：1,000,000,000,000,000,000 ÷ 10^6 = 1,000,000,000,000 utest
+   分数部分：1,000,000,000,000,000,000 mod 10^6 = 0 atest
    ```
 
 4. **余额更新**：
-   - x/bank：扣除 1,000,000 `uatom`（即 10^6 uatom）
+   - x/bank：扣除 1,000,000,000,000 `utest`（即 10^12 utest = 1 test）
    - x/precisebank：分数余额不变（因为整除）
 
 **重要说明**：
-- 发送 1 ETH（10^18 wei）应该只扣除 10^6 `uatom`
-- 如果发现实际扣除了 10^18 `uatom`，说明系统可能直接将 wei 金额作为 `uatom` 处理了
-- 正确的流程应该是：wei → aatom（金额不变）→ precisebank 转换 → uatom（除以 10^12）
+- 发送 1 ETH（10^18 wei）应该扣除 10^12 `utest`（即 1 test）
+- 正确的流程应该是：wei → atest（金额不变）→ precisebank 转换 → utest（除以 10^6）
+- 由于 1 test = 10^12 utest，所以 1 ETH 对应 1 test
 
 ## 查询余额示例
 
-### 查询整数余额（uatom）
+### 查询整数余额（utest）
 
 ```bash
-evmd query bank balances cosmos1hajh6rhhkjqkwet6wqld3lgx8ur4y3khsahcul
+evmd query bank balances <cosmos_address>
 ```
 
 **返回**：
@@ -794,29 +794,25 @@ evmd query bank balances cosmos1hajh6rhhkjqkwet6wqld3lgx8ur4y3khsahcul
 {
   "balances": [
     {
-      "denom": "uatom",
+      "denom": "utest",
       "amount": "1000000000000000000000"
-    },
-    {
-      "denom": "stake",
-      "amount": "500000000000000000000"
     }
   ]
 }
 ```
 
-### 查询扩展余额（aatom）
+### 查询扩展余额（atest）
 
 ```bash
-evmd query bank balances cosmos1hajh6rhhkjqkwet6wqld3lgx8ur4y3khsahcul --denom aatom
+evmd query bank balances <cosmos_address> --denom atest
 ```
 
 **返回**：
 ```json
 {
   "balance": {
-    "denom": "aatom",
-    "amount": "1000000000000000000000000000000000"  // 整数余额 × 10^12 + 分数余额
+    "denom": "atest",
+    "amount": "1000000000000000000000000000"  // 整数余额 × 10^6 + 分数余额
   }
 }
 ```
@@ -824,14 +820,14 @@ evmd query bank balances cosmos1hajh6rhhkjqkwet6wqld3lgx8ur4y3khsahcul --denom a
 ### 查询分数余额
 
 ```bash
-evmd query precisebank fractional-balance cosmos1hajh6rhhkjqkwet6wqld3lgx8ur4y3khsahcul
+evmd query precisebank fractional-balance <cosmos_address>
 ```
 
 **返回**：
 ```json
 {
   "fractional_balance": {
-    "denom": "aatom",
+    "denom": "atest",
     "amount": "0"  // 初始状态，分数余额为 0
   }
 }
@@ -839,38 +835,38 @@ evmd query precisebank fractional-balance cosmos1hajh6rhhkjqkwet6wqld3lgx8ur4y3k
 
 ## 配置总结
 
-| 配置项             | 值      | 说明                                    |
-| ------------------ | ------- | --------------------------------------- |
-| **evm_denom**      | `uatom` | 基础代币，6位小数，存储在 x/bank        |
-| **extended_denom** | `aatom` | 扩展代币，18位小数，由 precisebank 管理 |
-| **转换因子**       | 10^12   | uatom 到 aatom 的转换倍数               |
-| **base denom**     | `uatom` | 代币元数据中的基础单位                  |
-| **display denom**  | `atom`  | 显示单位（主单位）                      |
-| **bond denom**     | `stake` | Staking 使用的代币（与 EVM 无关）       |
+| 配置项             | 值      | 说明                                     |
+| ------------------ | ------- | ---------------------------------------- |
+| **evm_denom**      | `utest` | 基础代币，exponent=6，存储在 x/bank      |
+| **extended_denom** | `atest` | 扩展代币，exponent=0（最小单位），由 precisebank 管理 |
+| **转换因子**       | 10^6    | utest 到 atest 的转换倍数                |
+| **base denom**     | `atest` | 代币元数据中的基础单位                   |
+| **display denom**  | `test`  | 显示单位（主单位）                       |
+| **decimals**       | 6       | evm_denom 的 exponent                    |
 
 ## 关键要点
 
-1. **evm_denom = "uatom"**：
-   - 6 位小数精度
+1. **evm_denom = "utest"**：
+   - exponent = 6
    - 存储在 `x/bank` 模块
    - 用于 Cosmos SDK 原生交易
 
-2. **extended_denom = "aatom"**：
-   - 18 位小数精度
+2. **extended_denom = "atest"**：
+   - exponent = 0（最小单位）
    - 由 `precisebank` 模块管理
-   - 用于 EVM 交易
+   - 用于 EVM 交易（18 位小数表示）
 
 3. **转换关系**：
-   - 1 `uatom` = 10^12 `aatom`
-   - 账户总余额 = 整数余额（uatom）× 10^12 + 分数余额（aatom）
+   - 1 `utest` = 10^6 `atest`
+   - 账户总余额 = 整数余额（utest）× 10^6 + 分数余额（atest）
 
-4. **staking 代币**：
-   - `stake` 是独立的 staking 代币，与 EVM 代币系统无关
-   - EVM 交易只使用 `uatom`/`aatom` 系统
+4. **metadata 查找优先级**：
+   - 代码会先尝试用 `evm_denom` 查找 metadata
+   - 如果找不到，再尝试用 `extended_denom` 查找 metadata
 
 5. **初始状态**：
-   - Genesis 中只配置 `uatom` 余额
-   - `aatom` 的分数余额初始为 0
+   - Genesis 中配置 `utest` 余额
+   - `atest` 的分数余额初始为 0
    - 通过 EVM 交易后才会产生分数余额
 
 ## 验证命令
@@ -880,13 +876,13 @@ evmd query precisebank fractional-balance cosmos1hajh6rhhkjqkwet6wqld3lgx8ur4y3k
 evmd query evm params
 
 # 2. 查看代币元数据
-evmd query bank denom-metadata uatom
+evmd query bank denom-metadata utest
 
 # 3. 查询账户余额
 evmd query bank balances <address>
 
 # 4. 查询扩展余额
-evmd query bank balances <address> --denom aatom
+evmd query bank balances <address> --denom atest
 
 # 5. 查询分数余额
 evmd query precisebank fractional-balance <address>
