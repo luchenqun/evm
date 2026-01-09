@@ -85,8 +85,9 @@ func (k Keeper) LoadEvmCoinInfo(ctx sdk.Context) (_ types.EvmCoinInfo, err error
 	decimals = types.Decimals(evmDenomExp)
 
 	var extendedDenom string
-	if decimals == 18 {
+	if evmDenomExp == 0 {
 		extendedDenom = params.EvmDenom
+		decimals = types.Decimals(18)
 	} else {
 		if params.ExtendedDenomOptions == nil {
 			return types.EvmCoinInfo{}, fmt.Errorf("extended denom options cannot be nil for non-18-decimal chains")
