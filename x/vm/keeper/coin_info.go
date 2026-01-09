@@ -12,94 +12,53 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 )
 
-// LoadEvmCoinInfo load EvmCoinInfo from bank denom metadata
+// LoadEvmCoinInfo loads EvmCoinInfo from bank denom metadata.
+// For 18-decimal chains: evm_denom is the base (exp=0), extended_denom = evm_denom.
+// For non-18-decimal chains: evm_denom has exp>0, extended_denom required.
 func (k Keeper) LoadEvmCoinInfo(ctx sdk.Context) (_ types.EvmCoinInfo, err error) {
 	params := k.GetParams(ctx)
 	ctx, span := ctx.StartSpan(tracer, "LoadEvmCoinInfo", trace.WithAttributes(
 		attribute.String("evm_denom", params.EvmDenom),
 	))
 	defer func() { evmtrace.EndSpanErr(span, err) }()
-	var decimals types.Decimals
 
-	// Try to find metadata by evm_denom first
-	evmDenomMetadata, found := k.bankWrapper.GetDenomMetaData(ctx, params.EvmDenom)
-
-	// If not found, try to find by extended_denom (which might be the base denom)
+	// try evm_denom first, then extended_denom
+	metadata, found := k.bankWrapper.GetDenomMetaData(ctx, params.EvmDenom)
 	if !found && params.ExtendedDenomOptions != nil {
-		evmDenomMetadata, found = k.bankWrapper.GetDenomMetaData(ctx, params.ExtendedDenomOptions.ExtendedDenom)
+		metadata, found = k.bankWrapper.GetDenomMetaData(ctx, params.ExtendedDenomOptions.ExtendedDenom)
 	}
-
 	if !found {
-		extendedDenomStr := "N/A"
-		if params.ExtendedDenomOptions != nil {
-			extendedDenomStr = params.ExtendedDenomOptions.ExtendedDenom
-		}
-		return types.EvmCoinInfo{}, fmt.Errorf("denom metadata for %s (or extended denom %s) could not be found", params.EvmDenom, extendedDenomStr)
+		return types.EvmCoinInfo{}, fmt.Errorf("denom metadata not found for evm_denom %s or extended denom", params.EvmDenom)
 	}
 
-	var displayExp, evmDenomExp, baseExp uint32
-	displayFound, evmDenomFound, baseFound := false, false, false
-
-	for _, denomUnit := range evmDenomMetadata.DenomUnits {
-		if denomUnit.Denom == evmDenomMetadata.Display {
-			displayExp = denomUnit.Exponent
-			displayFound = true
-		}
-		if denomUnit.Denom == params.EvmDenom {
-			evmDenomExp = denomUnit.Exponent
-			evmDenomFound = true
-		}
-		if denomUnit.Denom == evmDenomMetadata.Base {
-			baseExp = denomUnit.Exponent
-			baseFound = true
-		}
+	// Extract exponents from denom_units
+	exponents := make(map[string]uint32)
+	for _, unit := range metadata.DenomUnits {
+		exponents[unit.Denom] = unit.Exponent
 	}
 
-	if !displayFound {
-		return types.EvmCoinInfo{}, fmt.Errorf("display denom %s not found in denom_units", evmDenomMetadata.Display)
-	}
-	if !evmDenomFound {
-		return types.EvmCoinInfo{}, fmt.Errorf("evm denom %s not found in denom_units", params.EvmDenom)
-	}
-	if !baseFound {
-		return types.EvmCoinInfo{}, fmt.Errorf("base denom %s not found in denom_units", evmDenomMetadata.Base)
+	evmDenomExp, ok := exponents[params.EvmDenom]
+	if !ok {
+		return types.EvmCoinInfo{}, fmt.Errorf("evm_denom %s not found in denom_units", params.EvmDenom)
 	}
 
-	// Calculate decimals: the evm denom exponent represents how many decimal places
-	// the evm denom has relative to the base denom (smallest unit with exp=0).
-	// For example, if base is "aatom" (exp=0), evm_denom is "uatom" (exp=6), and display is "atom" (exp=18),
-	// then 1 uatom = 10^6 aatom (base denom), meaning uatom has 6 decimal places relative to the base.
-	// The decimals value is set to evmDenomExp (6 in this example), which represents the number of decimal places
-	// the evm_denom has relative to the base denom.
-	// ConversionFactor[6] = 10^12 is needed to convert uatom (6 decimals) to 18-decimal representation (aatom),
-	// which is the extended denom used by the EVM.
-	//
-	// IMPORTANT: The base denom must be the extended denom (smallest unit) with exponent=0.
-	// For non-18-decimal chains: base must equal extended_denom (e.g., "aatom" with exp=0).
-	if baseExp != 0 {
-		return types.EvmCoinInfo{}, fmt.Errorf("base denom exponent must be 0, got %d for %s", baseExp, evmDenomMetadata.Base)
-	}
-	if displayExp < evmDenomExp {
-		return types.EvmCoinInfo{}, fmt.Errorf("display denom exponent (%d) must be greater than or equal to evm denom exponent (%d)", displayExp, evmDenomExp)
-	}
-	decimals = types.Decimals(evmDenomExp)
-
-	var extendedDenom string
+	extendedDenom := params.EvmDenom
+	decimals := evmDenomExp
 	if evmDenomExp == 0 {
-		extendedDenom = params.EvmDenom
-		decimals = types.Decimals(18)
-	} else {
-		if params.ExtendedDenomOptions == nil {
-			return types.EvmCoinInfo{}, fmt.Errorf("extended denom options cannot be nil for non-18-decimal chains")
-		}
+		// evm_denom is the base, 18-decimal chain
+		decimals = 18
+	} else if params.ExtendedDenomOptions != nil {
+		// Non-18-decimal chain, use extended_denom
 		extendedDenom = params.ExtendedDenomOptions.ExtendedDenom
+	} else {
+		return types.EvmCoinInfo{}, fmt.Errorf("extended_denom_options required when evm_denom exp > 0")
 	}
 
 	return types.EvmCoinInfo{
 		Denom:         params.EvmDenom,
 		ExtendedDenom: extendedDenom,
-		DisplayDenom:  evmDenomMetadata.Display,
-		Decimals:      decimals.Uint32(),
+		DisplayDenom:  metadata.Display,
+		Decimals:      decimals,
 	}, nil
 }
 
