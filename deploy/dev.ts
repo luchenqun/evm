@@ -15,8 +15,6 @@ const projectDir = path.resolve(curDir, "..");
 const nodesDir = path.join(curDir, "nodes");
 const PASS = "your-password";
 const RUNTIME_KEYRING = "file";
-const FIXED_VALIDATOR_MNEMONIC =
-  "october pride genuine harvest reunion sight become tuna kingdom punch girl lizard cat crater fee emotion seat test output safe volume caught design soft";
 const APP_PORTS = {
   "api.address": 1317,
   "grpc.address": 9090,
@@ -36,7 +34,6 @@ const HELP_TEXT = `Usage: node dev.ts [options]
       --init <bool>          Initialize chain data (default: true)
   -c, --compile <bool>       Compile binary before setup (default: false)
   -k, --keep <bool>          Reuse existing nodes directory (default: false)
-  -f, --fixed <bool>         Use a fixed mnemonic for node0 (default: false)
   -v, --validators <num>     Validator count (default: 1)
       --cn, --commonNode <num> Common node count (default: 0)
   -s, --start <value>        all | no | 0,1,...
@@ -49,8 +46,6 @@ const FLAG_ALIASES = new Map([
   ["compile", "compile"],
   ["k", "keep"],
   ["keep", "keep"],
-  ["f", "fixed"],
-  ["fixed", "fixed"],
   ["v", "validators"],
   ["validators", "validators"],
   ["cn", "commonNode"],
@@ -64,7 +59,6 @@ const FLAG_TYPES = {
   init: "boolean",
   compile: "boolean",
   keep: "boolean",
-  fixed: "boolean",
   validators: "number",
   commonNode: "number",
   start: "string",
@@ -82,6 +76,8 @@ const nodeHome = (config, index) => path.join(nodeDir(index), daemonName(config)
 const nodeConfigDir = (config, index) => path.join(nodeHome(config, index), "config");
 const nodeLogPath = (config, index) => path.join(nodesDir, `${daemonName(config)}${index}.log`);
 const nodePidPath = (config, index) => path.join(nodesDir, `${daemonName(config)}${index}.pid`);
+const validatorConfigAt = (config, index) => config.validatorConfigs?.[index] ?? null;
+const validatorKeyName = (config, index) => validatorConfigAt(config, index)?.name?.trim() || `node${index}`;
 const configPaths = (config, index) => {
   const dir = nodeConfigDir(config, index);
   return {
@@ -119,7 +115,6 @@ const parseArgs = (argv) => {
     init: true,
     compile: false,
     keep: false,
-    fixed: false,
     validators: 1,
     commonNode: 0,
     start: "all",
@@ -158,6 +153,14 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const readJson = async (target) => JSON.parse(await readFile(target, "utf8"));
 const writeJson = async (target, value) => writeFile(target, `${JSON.stringify(value, null, 2)}\n`);
 const copyIfMissing = async (from, to) => !(await exists(to)) && copyFile(from, to);
+const validateValidatorConfigs = (config, validators) => {
+  const names = new Set();
+  for (let i = 0; i < validators; i++) {
+    const name = validatorKeyName(config, i);
+    if (names.has(name)) throw new Error(`duplicate validator key name: ${name}`);
+    names.add(name);
+  }
+};
 const parseStatusHeights = (stdout) =>
   stdout
     .split(/\r?\n/)
@@ -272,11 +275,11 @@ const loadConfig = async () => {
       cfg: flatten(app),
     },
     cometbft: { port: COMET_PORTS, cfg: flatten(cometbft) },
+    validatorConfigs: raw.validators ?? [],
     preMineAccounts: raw["pre-mine-accounts"] ?? [],
     privateKeys: raw["private-keys"] ?? [],
     preMinePerAccount: raw["pre-mine-per-account"] ?? "10000000000000000000000000",
     genesisCfg: raw["genesis-cfg"] ?? [],
-    fixed: false,
   };
 };
 
@@ -460,8 +463,10 @@ const initNodes = async (binary, config, totalNodes) => {
   const keyring = resolveKeyring(config);
   for (let i = 0; i < totalNodes; i++) {
     const home = await initNodeHome(binary, config, i);
-    if (i === 0 && config.fixed) await recoverKey(binary, "node0", FIXED_VALIDATOR_MNEMONIC, home, keyring);
-    else await addKey(binary, `node${i}`, home, keyring);
+    const keyName = validatorKeyName(config, i);
+    const mnemonic = validatorConfigAt(config, i)?.mnemonic?.trim();
+    if (mnemonic) await recoverKey(binary, keyName, mnemonic, home, keyring);
+    else await addKey(binary, keyName, home, keyring);
   }
   await syncGenesis(daemon, totalNodes);
 };
@@ -485,7 +490,7 @@ const rebuildGentxs = async (binary, config, totalNodes, validators) => {
     const args = [
       "genesis",
       "gentx",
-      `node${i}`,
+      validatorKeyName(config, i),
       `100000000000000000000${denom}`,
       "--home",
       home,
@@ -529,7 +534,7 @@ const applyGenesis = async (binary, config, totalNodes, validators) => {
   }
   for (let i = 0; i < totalNodes; i++) {
     const home = nodeHome(config, i);
-    const address = await keyAddress(binary, `node${i}`, home, keyring);
+    const address = await keyAddress(binary, validatorKeyName(config, i), home, keyring);
     if (!addresses.has(address)) addresses.set(address, amount);
   }
   for (let i = 0; i < totalNodes; i++) {
@@ -751,6 +756,7 @@ const refreshKeptNetwork = async (binary, config) => {
 const initNetwork = async (binary, config, options) => {
   const totalNodes = options.validators + options.commonNode;
   if (options.validators < 1) throw new Error("validators must be >= 1");
+  validateValidatorConfigs(config, options.validators);
 
   await rm(nodesDir, { recursive: true, force: true });
   await mkdir(nodesDir, { recursive: true });
@@ -770,10 +776,9 @@ const main = async () => {
   const totalNodes = options.validators + options.commonNode;
   await initTomlEditor();
   const config = await loadConfig();
-  config.fixed = options.fixed;
   const daemon = daemonName(config);
   console.log(
-    `validators:${options.validators}, commonNode:${options.commonNode}, init:${options.init}, compile:${options.compile}, fixed:${options.fixed}, start:${options.start}, stop:${options.stop}, keep:${options.keep}, nohup:${options.nohup}\n`,
+    `validators:${options.validators}, commonNode:${options.commonNode}, init:${options.init}, compile:${options.compile}, start:${options.start}, stop:${options.stop}, keep:${options.keep}, nohup:${options.nohup}\n`,
   );
   if (options.stop) return stopNodes(options.stop);
   const stopAll = path.join(nodesDir, `stopAll.${scriptExt()}`);
