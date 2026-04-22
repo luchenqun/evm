@@ -1,0 +1,25 @@
+{
+  "name": "deploy",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@rainbowatcher/toml-edit-js": "^0.6.5",
+    "ethers": "^6.15.0"
+  },
+  "devDependencies": {
+    "prettier": "^3.8.3"
+  },
+  "scripts": {
+    "format": "prettier --write \"*.ts\" \"*.json\" \".prettierrc.json\" \".vscode/settings.json\"",
+    "format:check": "prettier --check \"*.ts\" \"*.json\" \".prettierrc.json\" \".vscode/settings.json\"",
+    "init": "node dev.ts --v=1 --cn=0 --c=false --s=no",
+    "start": "node dev.ts --v=1 --cn=0 --c=false",
+    "start:1v1n": "node dev.ts --v=1 --cn=1 --c=false",
+    "start:3v1n": "node dev.ts --v=3 --cn=1 --c=false",
+    "start:4v": "node dev.ts --v=4 --cn=0 --c=false",
+    "stop": "node dev.ts --stop=all",
+    "restart": "node dev.ts --c=true --k",
+    "traffic:validator": "node validator-traffic.ts",
+    "traffic:validator:compile": "node validator-traffic.ts --compile"
+  }
+}
