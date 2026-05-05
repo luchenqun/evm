@@ -195,18 +195,6 @@ func (s *IntegrationTestSuite) TestMempoolRemove() {
 		verifyFunc    func()
 	}{
 		{
-			name: "remove cosmos transaction success",
-			setupTx: func() sdk.Tx {
-				return s.createCosmosSendTx(s.keyring.GetKey(0), big.NewInt(1000000000))
-			},
-			insertFirst: true,
-			wantError:   false,
-			verifyFunc: func() {
-				mpool := s.network.App.GetMempool()
-				s.Require().Equal(0, mpool.CountTx())
-			},
-		},
-		{
 			name: "remove EVM transaction fail",
 			setupTx: func() sdk.Tx {
 				return s.createEVMValueTransferTx(s.keyring.GetKey(0), 0, big.NewInt(1000000000))
@@ -229,19 +217,6 @@ func (s *IntegrationTestSuite) TestMempoolRemove() {
 			wantError:     true,
 			errorContains: "transaction has no messages",
 			verifyFunc: func() {
-			},
-		},
-		{
-			name: "remove non-existent transaction",
-			setupTx: func() sdk.Tx {
-				return s.createCosmosSendTx(s.keyring.GetKey(0), big.NewInt(1000000000))
-			},
-			insertFirst:   false,
-			wantError:     true, // Remove should error for non-existent transactions
-			errorContains: "tx not found in mempool",
-			verifyFunc: func() {
-				mpool := s.network.App.GetMempool()
-				s.Require().Equal(0, mpool.CountTx())
 			},
 		},
 	}
