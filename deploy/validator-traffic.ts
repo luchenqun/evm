@@ -28,8 +28,10 @@ const GOV_PROPOSAL_LIMIT = 10;
 const GOV_SUBMIT_INTERVAL = 3;
 const GOV_EXTRA_DEPOSIT = "1";
 const CLI_GAS = "300000";
+let cliGasPrice;
 const CLI_FUND_AMOUNT = "100000000000000000";
 const LOOP_DELAY_MS = 250;
+const CLI_SEQUENCE_DELAY_MS = 1500;
 const ROUND_DELAY_MS = 1000;
 const RECEIPT_RETRY_DELAY_MS = 1000;
 const RECEIPT_RETRY_LIMIT = 90;
@@ -234,7 +236,7 @@ const cliBaseArgs = (index, chainId) => {
     "--gas",
     CLI_GAS,
     "--gas-prices",
-    "0atest",
+    cliGasPrice,
     "--broadcast-mode",
     "sync",
     "--yes",
@@ -288,7 +290,12 @@ const queryJson = async (args, required = false) => {
 };
 
 const sendCli = async (name, args, expectedFailure = false, required = false) => {
-  const result = await run(binary, args, deployDir, true);
+  let result;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    result = await run(binary, args, deployDir, true);
+    if (result.ok || !/sequence mismatch|account sequence/i.test(result.stderr || result.stdout)) break;
+    await sleep(CLI_SEQUENCE_DELAY_MS);
+  }
   if (!result.ok) {
     if (required) {
       throw new Error(result.stderr || result.stdout);
@@ -312,6 +319,7 @@ const sendCli = async (name, args, expectedFailure = false, required = false) =>
     return payload;
   }
   log("cli_ok", { name, hash: payload?.txhash ?? "" });
+  await sleep(CLI_SEQUENCE_DELAY_MS);
   return payload;
 };
 
@@ -365,6 +373,14 @@ const main = async () => {
 
   await waitForRpc(provider0, "node0");
   await waitForRpc(provider1, "node1");
+
+  const feeMarket = await queryJson(["query", "feemarket", "params", "--node", nodePaths(0).tm, "-o", "json"], true);
+  const minGasPrice = feeMarket?.params?.min_gas_price;
+  if (typeof minGasPrice !== "string" || !/^\d+(?:\.\d+)?$/.test(minGasPrice)) {
+    throw new Error("Invalid feemarket min_gas_price");
+  }
+  cliGasPrice = `${minGasPrice}atest`;
+  log("cli_fee", { gas: CLI_GAS, gasPrice: cliGasPrice });
 
   const [{ secret: mnemonic0 }, { secret: mnemonic1 }, privValidator] = await Promise.all([
     readJson(nodePaths(0).keySeed),
