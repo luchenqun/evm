@@ -440,8 +440,14 @@ const main = async () => {
   await waitForValidator(node1Valoper);
   log("validator_ready", { validator: node1Valoper });
 
-  const govParams = await queryJson(["query", "gov", "params", "--node", nodePaths(0).tm, "-o", "json"], true);
-  const govMinDeposit = BigInt(govParams?.params?.min_deposit?.[0]?.amount ?? "1");
+  const govResponse = await queryJson(["query", "gov", "params", "--node", nodePaths(0).tm, "-o", "json"], true);
+  const govParams = govResponse?.params ?? govResponse;
+  const minDeposit = govParams?.min_deposit?.find((coin) => coin.denom === "atest");
+  if (!minDeposit || !/^\d+$/.test(minDeposit.amount) || BigInt(minDeposit.amount) <= 0n) {
+    throw new Error(`Invalid governance min_deposit for atest: ${JSON.stringify(govResponse)}`);
+  }
+  const govMinDeposit = BigInt(minDeposit.amount);
+  log("gov_params", { minDeposit: `${govMinDeposit}atest` });
   const staking0 = new Contract(STAKING_ADDRESS, STAKING_ABI, signer0);
   const distribution0 = new Contract(DISTRIBUTION_ADDRESS, DISTRIBUTION_ABI, signer0);
   const distribution1 = new Contract(DISTRIBUTION_ADDRESS, DISTRIBUTION_ABI, signer1);
@@ -465,7 +471,7 @@ const main = async () => {
 
   const submitProposal = async (round) => {
     const outcome = nextProposalId % 2 === 1 ? "pass" : "reject";
-    const file = await writeProposalFile(nextProposalId, govMinDeposit.toString(), outcome, govParams.params);
+    const file = await writeProposalFile(nextProposalId, govMinDeposit.toString(), outcome, govParams);
     const submitted = await sendCli(`gov_submit_${nextProposalId}`, cliGovSubmitArgs(0, chainId, "traffic0", file));
     if (!submitted) {
       return;
